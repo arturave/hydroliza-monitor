@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+
+<title>Hydroliza Monitor</title>
+
+<!-- Paho MQTT over WebSocket -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.1.0/paho-mqtt-min.js"></script>
+
+<!-- Chart.js -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<style>
+body {
+  font-family: Arial, sans-serif;
+  margin:20px;
+}
+#controls, #charts {
+  margin-bottom:20px;
+}
+label { margin-right:10px; }
+input[type=number] { width:60px; }
+</style>
+</head>
+<body>
+
+<h1>Monitor Hydrolizy</h1>
+
+<div id="controls">
+  <label>Wybierz urządzenie:
+    <select id="deviceSelect">
+      <option value="1">Hydroliza1</option>
+      <option value="2">Hydroliza2</option>
+      <option value="3">Hydroliza3</option>
+    </select>
+  </label>
+  
+  <label>Wybierz parametr:
+    <select id="paramSelect">
+      <option value="COD">COD</option>
+      <option value="PH">PH</option>
+      <option value="COND">COND</option>
+      <option value="ORP">ORP</option>
+      <option value="WEIGHT">WEIGHT</option>
+      <option value="TEMP">TEMP</option>
+      <option value="HUM">HUM</option>
+      <option value="CO2">CO2</option>
+    </select>
+  </label>
+  
+  <label>Nowa wartość:
+    <input type="number" step="0.01" id="newValue" value="100">
+  </label>
+  
+  <button id="setBtn">Ustaw</button>
+</div>
+
+<div id="charts">
+  <h2>Wykres wartości (ostatnie 20 pomiarów)</h2>
+  <canvas id="myChart" width="400" height="200"></canvas>
+</div>
+
+<script>
+// Konfiguracja MQTT
+const clientId = "webClient_" + Math.random().toString(36).substring(2, 15);
+const host = "broker.hivemq.com";
+const port = 8000; // WebSocket port HiveMQ
+const topicBase = "hydroliza/+/+";
+
+// Połączenie z brokerem
+let client = new Paho.MQTT.Client(host, port, clientId);
+
+// Po połączeniu:
+client.onConnectionLost = (responseObject) => {
+  console.log("Connection lost:", responseObject.errorMessage);
+};
+
+client.onMessageArrived = (message) => {
+  // topic format: hydroliza/{device}/{param}
+  const t = message.destinationName.split('/');
+  if (t.length === 3) {
+    let device = t[1];
+    let param = t[2];
+    let val = parseFloat(message.payloadString);
+
+    // Jeśli aktualnie wyświetlamy dane dla tego parametru i urządzenia, dodaj do wykresu
+    if (device === currentDevice && param === currentParam) {
+      addDataToChart(val);
+    }
+  }
+};
+
+function onConnect() {
+  console.log("Połączono z MQTT");
+  client.subscribe("hydroliza/+/+");
+}
+
+client.connect({onSuccess:onConnect});
+
+// Chart.js - tworzymy wykres
+const ctx = document.getElementById('myChart').getContext('2d');
+let chartData = {
+  labels: [],
+  datasets: [{
+    label: 'Wartość parametru',
+    data: [],
+    borderColor: 'blue',
+    fill: false
+  }]
+};
+let myChart = new Chart(ctx, {
+  type: 'line',
+  data: chartData,
+  options: {
+    animation: false,
+    scales: {
+      x: {display:false},
+      y: {beginAtZero:true}
+    }
+  }
+});
+
+function addDataToChart(value) {
+  chartData.labels.push('');
+  chartData.datasets[0].data.push(value);
+  if (chartData.labels.length > 20) {
+    chartData.labels.shift();
+    chartData.datasets[0].data.shift();
+  }
+  myChart.update();
+}
+
+// Zmienne do śledzenia aktualnie wybranego parametru i urządzenia
+let currentDevice = "1";
+let currentParam = "COD";
+
+// Podłączenie zdarzeń
+document.getElementById('deviceSelect').addEventListener('change', (e)=>{
+  currentDevice = e.target.value;
+  resetChart();
+});
+
+document.getElementById('paramSelect').addEventListener('change', (e)=>{
+  currentParam = e.target.value;
+  resetChart();
+});
+
+document.getElementById('setBtn').addEventListener('click', ()=>{
+  let val = parseFloat(document.getElementById('newValue').value);
+  if (isNaN(val)) return;
+  // Publikacja set parametru: hydroliza/{device}/set/{param}
+  let topic = "hydroliza/" + currentDevice + "/set/" + currentParam;
+  let msg = new Paho.MQTT.Message(val.toString());
+  msg.destinationName = topic;
+  client.send(msg);
+  console.log("Wysłano:", topic, val);
+});
+
+function resetChart() {
+  chartData.labels = [];
+  chartData.datasets[0].data = [];
+  myChart.update();
+}
+
+</script>
+
+</body>
+</html>
